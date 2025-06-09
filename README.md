@@ -1,0 +1,2 @@
+# AgenticEdge
+Finance Email Summarizer
