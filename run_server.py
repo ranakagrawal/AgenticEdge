@@ -7,9 +7,14 @@ import os
 import sys
 import logging
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+current_dir = Path(__file__).parent
+env_path = current_dir / ".env"
+load_dotenv(dotenv_path=env_path)
 
 # Add the current directory to Python path
-current_dir = Path(__file__).parent
 sys.path.insert(0, str(current_dir))
 
 # Configure basic logging

@@ -6,9 +6,9 @@ from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 from pathlib import Path
 
-env_path = Path(".env") / ".env"
-
-# Load environment variables from .env file
+# Load environment variables from .env file in project root
+project_root = Path(__file__).parent.parent
+env_path = project_root / ".env"
 load_dotenv(dotenv_path=env_path)
 
 

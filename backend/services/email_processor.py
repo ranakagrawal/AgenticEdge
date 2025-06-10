@@ -86,10 +86,16 @@ class EmailProcessingService:
     ) -> List[Dict[str, Any]]:
         """Fetch emails from Gmail using the user's credentials."""
         
+        logger.info(f"_fetch_emails function called for user {user_profile.user_id}")
+        logger.info(f"Parameters: days_back={days_back}, max_emails={max_emails}")
+        
         if not user_profile.access_token or not user_profile.refresh_token:
+            logger.error("User does not have valid Gmail credentials")
             raise ValueError("User does not have valid Gmail credentials")
         
         try:
+            logger.info("Calling Gmail service to fetch financial emails...")
+            
             # Use Gmail service to fetch emails
             emails = self.gmail_service.get_financial_emails(
                 access_token=user_profile.access_token,
@@ -97,13 +103,17 @@ class EmailProcessingService:
                 days_back=days_back,
                 max_results=max_emails
             )
+
+            logger.info(f"Successfully fetched {len(emails)} emails from Gmail")
+            logger.info(f"Fetched emails data: {emails}")
             
             return emails
+
+            
             
         except Exception as e:
             logger.error(f"Error fetching emails for user {user_profile.user_id}: {e}")
             raise
-    
     async def _process_emails_with_crew(
         self, 
         emails: List[Dict[str, Any]], 

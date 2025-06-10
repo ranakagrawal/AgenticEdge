@@ -7,12 +7,18 @@ import os
 import sys
 import subprocess
 from pathlib import Path
+from dotenv import load_dotenv
 
 def main():
     """Run the Streamlit application."""
     
     # Get the directory of this script
     current_dir = Path(__file__).parent
+    
+    # Load environment variables from .env file in project root
+    project_root = current_dir.parent
+    env_path = project_root / ".env"
+    load_dotenv(dotenv_path=env_path)
     
     # Path to the main Streamlit app
     app_path = current_dir / "streamlit_app.py"
@@ -30,7 +36,8 @@ def main():
     print("   - Network URL: http://your-ip:8501")
     print()
     print("🔧 Make sure your FastAPI backend is running on:")
-    print("   - Backend URL: http://localhost:8000")
+    api_url = os.getenv("API_BASE_URL", "http://localhost:8000")
+    print(f"   - Backend URL: {api_url}")
     print()
     print("=" * 60)
     

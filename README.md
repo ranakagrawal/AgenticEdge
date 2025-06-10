@@ -53,12 +53,19 @@ Gmail API → Email Fetcher → Preprocessor → Entity Extractor (LLM)
    # Edit .env with your API keys
    ```
 
-4. **Configure environment variables**
+4. **Configure environment variables in .env file**
    ```env
    OPENAI_API_KEY=your_openai_api_key_here
    GOOGLE_CLIENT_ID=your_google_client_id_here
    GOOGLE_CLIENT_SECRET=your_google_client_secret_here
+   GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
+   MONGODB_URL=mongodb://localhost:27017
+   DATABASE_NAME=finance_email_summarizer
+   SECRET_KEY=your-secret-key-change-in-production
+   API_BASE_URL=http://localhost:8000
    ```
+   
+   > **Note**: The project automatically loads all environment variables from the `.env` file. All Python scripts (backend, frontend, tests) are configured to use `python-dotenv` for seamless environment variable loading.
 
 5. **Run the server**
    ```bash

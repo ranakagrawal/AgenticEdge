@@ -1,8 +1,10 @@
 """Main FastAPI application for Finance Email Summarizer."""
 
 import json
+import os
+import glob
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.responses import RedirectResponse, JSONResponse
@@ -58,6 +60,33 @@ email_processor = EmailProcessingService()
 # In-memory storage for demo (use Redis/Database in production)
 user_sessions = {}
 user_profiles = {}
+user_entities = {}  # Store entities by user_id
+
+
+async def _load_entities_from_logs(user_id: str) -> List[Dict[str, Any]]:
+    """Load entities from processing log files for a user."""
+    try:
+        # Look for processing log files for this user
+        log_pattern = f"logs/processing_*{user_id[:8]}*.json"
+        log_files = glob.glob(log_pattern)
+        
+        if not log_files:
+            return []
+        
+        # Get the most recent log file
+        latest_log = max(log_files, key=os.path.getmtime)
+        
+        with open(latest_log, 'r') as f:
+            log_data = json.load(f)
+            
+        entities = log_data.get('entities', [])
+        logger.info(f"Loaded {len(entities)} entities from log file {latest_log}")
+        
+        return entities
+        
+    except Exception as e:
+        logger.error(f"Error loading entities from logs for user {user_id}: {e}")
+        return []
 
 
 @app.get("/")
@@ -176,7 +205,7 @@ async def process_user_emails(
         
         user_profile = user_profiles[user_id]
         
-        logger.info(f"Starting email processing for user: {user_profile.email}")
+        logger.info(f"Starting email processing for user: {user_profile}")
         
         # Process emails through the complete pipeline
         processing_result = await email_processor.process_user_emails(
@@ -184,6 +213,11 @@ async def process_user_emails(
             days_back=request.days_back,
             max_emails=request.max_emails
         )
+        
+        # Store entities in memory for immediate access
+        if 'entities' in processing_result and processing_result['entities']:
+            user_entities[user_id] = processing_result['entities']
+            logger.info(f"Stored {len(processing_result['entities'])} entities in memory for user {user_id}")
         
         return ProcessingResponse(
             run_id=processing_result['run_id'],
@@ -261,29 +295,56 @@ async def get_user_entities(
 ):
     """Get financial entities for a user with optional filtering."""
     
-    if user_id not in user_profiles:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Try to get entities from memory first
+    entities = user_entities.get(user_id, [])
     
-    # In production, this would query the database
-    # For now, return a placeholder response
+    # If no entities in memory, try to load from latest processing log
+    if not entities:
+        entities = await _load_entities_from_logs(user_id)
+        if entities:
+            user_entities[user_id] = entities
+    
+    # If still no entities, try loading by partial user_id match (for demo purposes)
+    if not entities:
+        try:
+            log_files = glob.glob("logs/processing_*.json")
+            if log_files:
+                # Get the most recent log file
+                latest_log = max(log_files, key=os.path.getmtime)
+                with open(latest_log, 'r') as f:
+                    log_data = json.load(f)
+                entities = log_data.get('entities', [])
+                logger.info(f"Loaded {len(entities)} entities from latest log file {latest_log}")
+        except Exception as e:
+            logger.error(f"Error loading from latest log: {e}")
+    
+    # Apply filters
+    filtered_entities = entities
+    if entity_type:
+        filtered_entities = [e for e in filtered_entities if e.get('entity_type') == entity_type]
+    if category:
+        filtered_entities = [e for e in filtered_entities if e.get('category') == category]
+    
+    # Calculate summary
+    total_amount = sum(float(e.get('amount', 0)) for e in filtered_entities)
+    summary = {
+        "total_entities": len(filtered_entities),
+        "total_amount": total_amount,
+        "by_type": {
+            "subscriptions": len([e for e in filtered_entities if e.get('entity_type') == 'subscription']),
+            "bills": len([e for e in filtered_entities if e.get('entity_type') == 'bill']),
+            "loans": len([e for e in filtered_entities if e.get('entity_type') == 'loan'])
+        }
+    }
     
     return {
         "user_id": user_id,
-        "entities": [],
+        "entities": filtered_entities,
         "filters": {
             "entity_type": entity_type,
             "category": category
         },
-        "summary": {
-            "total_entities": 0,
-            "total_amount": 0,
-            "by_type": {
-                "subscriptions": 0,
-                "bills": 0,
-                "loans": 0
-            }
-        },
-        "message": "Entity storage not implemented yet. Check processing logs for extracted entities."
+        "summary": summary
     }
 
 
