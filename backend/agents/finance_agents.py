@@ -17,6 +17,7 @@ from backend.agents.tools import (
     DeduplicationTool,
     DatabaseTool
 )
+from backend.agents.finance_tasks import FinanceProcessingTasks
 
 
 class FinanceProcessingAgents:
@@ -24,9 +25,11 @@ class FinanceProcessingAgents:
     
     def __init__(self):
         self.llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            temperature=0.1,
-            openai_api_key=settings.openai_api_key
+            model=settings.llm_model,
+            temperature=settings.crewai_temperature,
+            openai_api_key=settings.openai_api_key,
+            max_tokens=settings.llm_max_tokens,
+            request_timeout=settings.llm_request_timeout
         )
         
         # Initialize tools
@@ -36,6 +39,9 @@ class FinanceProcessingAgents:
         self.classification_tool = ClassificationTool()
         self.deduplication_tool = DeduplicationTool()
         self.database_tool = DatabaseTool()
+        
+        # Initialize tasks factory
+        self.tasks_factory = FinanceProcessingTasks(self)
     
     def create_supervisor_agent(self) -> Agent:
         """Create supervisor agent to orchestrate the pipeline."""
@@ -65,6 +71,42 @@ class FinanceProcessingAgents:
             llm=self.llm,
             tools=[]
         )
+    
+    def create_processing_crew(self, user_profile, days_back: int = 180, max_emails: int = 100) -> Crew:
+        """Create and configure the complete processing crew with tasks."""
+        
+        # Create all tasks with dependencies
+        tasks = self.tasks_factory.create_task_workflow(user_profile, days_back, max_emails)
+        
+        # Create all agents (they're already assigned to tasks)
+        agents = [
+            self.create_email_fetcher_agent(),
+            self.create_preprocessor_agent(),
+            self.create_entity_extractor_agent(),
+            self.create_schema_validator_agent(),
+            self.create_classifier_agent(),
+            self.create_validator_deduplicator_agent(),
+            self.create_state_updater_agent(),
+            self.create_notifier_agent()
+        ]
+        
+        # Create crew with sequential process
+        crew = Crew(
+            agents=agents,
+            tasks=tasks,
+            process=Process.sequential,
+            verbose=settings.crewai_verbose,
+            memory=settings.crewai_memory,
+            max_execution_time=settings.crewai_max_execution_time,
+            max_iter=settings.crewai_max_iter
+        )
+        
+        logger.info(f"Created processing crew with {len(agents)} agents and {len(tasks)} tasks")
+        return crew
+    
+    def create_all_tasks(self, user_profile, days_back: int = 180, max_emails: int = 100) -> List[Task]:
+        """Create all tasks for the processing workflow."""
+        return self.tasks_factory.create_task_workflow(user_profile, days_back, max_emails)
     
     def create_preprocessor_agent(self) -> Agent:
         """Create agent for email preprocessing and cleaning."""

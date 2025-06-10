@@ -135,7 +135,108 @@ class ProcessingRun(BaseModel):
     emails_processed: int = Field(default=0)
     entities_extracted: int = Field(default=0)
     errors: list[str] = Field(default_factory=list)
+    error_category: Optional[str] = Field(None, description="Error category for recovery")
+    recovery_suggestions: list[str] = Field(default_factory=list, description="Recovery suggestions")
     
     class Config:
         populate_by_name = True
-        arbitrary_types_allowed = True 
+        arbitrary_types_allowed = True
+
+
+# CrewAI Task Input/Output Models
+
+class EmailData(BaseModel):
+    """Model for email data structure."""
+    
+    message_id: str = Field(..., description="Gmail message ID")
+    subject: str = Field(..., description="Email subject")
+    body: str = Field(..., description="Email body content")
+    sender: str = Field(..., description="Sender email address", alias="from")
+    date: datetime = Field(..., description="Email date")
+    
+    class Config:
+        populate_by_name = True
+
+
+class TaskContext(BaseModel):
+    """Base model for task context data."""
+    
+    emails: list[EmailData] = Field(..., description="List of emails to process")
+    user_profile: dict = Field(..., description="User profile information")
+    run_id: str = Field(..., description="Processing run ID")
+    user_id: str = Field(..., description="User ID")
+    processing_params: dict = Field(default_factory=dict, description="Processing parameters")
+
+
+class PreprocessedEmailData(BaseModel):
+    """Model for preprocessed email data."""
+    
+    message_id: str = Field(..., description="Original message ID")
+    clean_text: str = Field(..., description="Cleaned email text")
+    extraction_ready: bool = Field(default=True, description="Ready for entity extraction")
+
+
+class ExtractedEntityData(BaseModel):
+    """Model for extracted entity data."""
+    
+    merchant: str = Field(..., description="Merchant name")
+    amount: float = Field(..., description="Payment amount")
+    currency: str = Field(default="INR", description="Currency")
+    due_date: Optional[str] = Field(None, description="Due date in YYYY-MM-DD format")
+    entity_type: str = Field(..., description="Entity type")
+    category: str = Field(..., description="Entity category")
+    auto_debit: Optional[bool] = Field(None, description="Auto debit status")
+    billing_cycle: Optional[str] = Field(None, description="Billing cycle")
+    principal_amount: Optional[float] = Field(None, description="Principal amount")
+    interest_amount: Optional[float] = Field(None, description="Interest amount")
+    late_fee: Optional[float] = Field(None, description="Late fee")
+    confidence_score: float = Field(..., description="Extraction confidence")
+    source_message_id: str = Field(..., description="Source email message ID")
+
+
+class ValidationResult(BaseModel):
+    """Model for validation results."""
+    
+    valid: bool = Field(..., description="Whether validation passed")
+    errors: list[str] = Field(default_factory=list, description="Validation errors")
+    validated_data: Optional[dict] = Field(None, description="Validated entity data")
+
+
+class ClassificationResult(BaseModel):
+    """Model for classification results."""
+    
+    classified: bool = Field(..., description="Whether classification succeeded")
+    entity_data: dict = Field(..., description="Classified entity data")
+    processing_rules: dict = Field(default_factory=dict, description="Processing rules")
+    urgency_level: Optional[str] = Field(None, description="Urgency level")
+    priority_score: Optional[int] = Field(None, description="Priority score")
+
+
+class DeduplicationResult(BaseModel):
+    """Model for deduplication results."""
+    
+    unique_entities: list[dict] = Field(..., description="Unique entities after deduplication")
+    duplicate_info: list[dict] = Field(default_factory=list, description="Information about duplicates found")
+    total_unique: int = Field(..., description="Total number of unique entities")
+    duplicates_found: int = Field(default=0, description="Number of duplicates found")
+
+
+class StorageResult(BaseModel):
+    """Model for storage operation results."""
+    
+    stored_entities: list[dict] = Field(..., description="Successfully stored entities")
+    total_stored: int = Field(..., description="Total number of entities stored")
+    storage_errors: list[str] = Field(default_factory=list, description="Storage errors if any")
+
+
+class ProcessingNotification(BaseModel):
+    """Model for processing completion notifications."""
+    
+    run_id: str = Field(..., description="Processing run ID")
+    user_id: str = Field(..., description="User ID")
+    total_emails: int = Field(..., description="Total emails processed")
+    entities_stored: int = Field(..., description="Entities successfully stored")
+    processing_duration: float = Field(..., description="Processing time in seconds")
+    urgent_payments: list[dict] = Field(default_factory=list, description="Urgent payments identified")
+    errors: list[str] = Field(default_factory=list, description="Processing errors")
+    recommendations: list[str] = Field(default_factory=list, description="User recommendations") 

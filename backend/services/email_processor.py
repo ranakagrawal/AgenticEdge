@@ -2,7 +2,8 @@
 
 import asyncio
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from loguru import logger
 
@@ -37,7 +38,7 @@ class EmailProcessingService:
             status="running"
         )
         
-        logger.info(f"Starting email processing run {run_id} for user {user_profile.user_id}")
+        logger.info(f"[CREWAI] Starting email processing run {run_id} for user {user_profile.user_id}")
         
         try:
             # Step 1: Fetch emails from Gmail
@@ -54,8 +55,8 @@ class EmailProcessingService:
             logger.info(f"Fetched {len(emails)} emails for processing")
             
             # Step 2: Process emails through CrewAI pipeline
-            logger.info("Step 2: Processing emails through AI pipeline")
-            processed_entities = await self._process_emails_with_crew(emails, user_profile.user_id)
+            logger.info("[CREWAI] Step 2: Processing emails through CrewAI crew orchestration")
+            processed_entities = await self._run_crewai_pipeline(emails, user_profile, run_id)
             processing_run.entities_extracted = len(processed_entities)
             
             # Step 3: Log results
@@ -66,7 +67,7 @@ class EmailProcessingService:
             processing_run.status = "completed"
             processing_run.completed_at = datetime.utcnow()
             
-            logger.info(f"Successfully completed processing run {run_id}")
+            logger.info(f"[CREWAI] Successfully completed processing run {run_id}")
             
             return self._create_processing_result(processing_run, processed_entities)
             
@@ -75,6 +76,11 @@ class EmailProcessingService:
             processing_run.status = "failed"
             processing_run.completed_at = datetime.utcnow()
             processing_run.errors.append(str(e))
+            
+            # Enhanced error handling for different failure types
+            error_details = self._categorize_processing_error(e)
+            processing_run.error_category = error_details.get('category', 'unknown')
+            processing_run.recovery_suggestions = error_details.get('suggestions', [])
             
             return self._create_processing_result(processing_run, [], error=str(e))
     
@@ -114,13 +120,222 @@ class EmailProcessingService:
         except Exception as e:
             logger.error(f"Error fetching emails for user {user_profile.user_id}: {e}")
             raise
-    async def _process_emails_with_crew(
+    async def _run_crewai_pipeline(
+        self, 
+        emails: List[Dict[str, Any]], 
+        user_profile: UserProfile, 
+        run_id: str
+    ) -> List[Dict[str, Any]]:
+        """Process emails through CrewAI crew orchestration using crew.kickoff()."""
+        
+        try:
+            logger.info(f"[CREWAI] Starting CrewAI pipeline for {len(emails)} emails")
+            
+            # Create the processing crew with all tasks and agents
+            crew = self.agents_factory.create_processing_crew(
+                user_profile=user_profile,
+                days_back=180,  # This will be passed in task context
+                max_emails=100  # This will be passed in task context
+            )
+            
+            # Prepare input data for the crew
+            crew_input = {
+                "emails": emails,
+                "user_profile": {
+                    "user_id": user_profile.user_id,
+                    "access_token": user_profile.access_token,
+                    "refresh_token": user_profile.refresh_token
+                },
+                "run_id": run_id,
+                "user_id": user_profile.user_id,
+                "processing_params": {
+                    "days_back": 180,
+                    "max_emails": 100
+                }
+            }
+            
+            logger.info("[CREWAI] Executing crew kickoff with all tasks...")
+            
+            # Execute the crew with kickoff() - this runs all tasks in sequence
+            result = crew.kickoff(inputs=crew_input)
+            
+            logger.info("[CREWAI] CrewAI crew execution completed successfully")
+            
+            # Parse the result to extract processed entities
+            if isinstance(result, dict) and 'processed_entities' in result:
+                processed_entities = result['processed_entities']
+            else:
+                # If result format is different, extract from the final task output
+                processed_entities = self._extract_entities_from_crew_result(result)
+            
+            logger.info(f"[CREWAI] CrewAI pipeline processed {len(processed_entities)} entities")
+            return processed_entities
+            
+        except Exception as e:
+            logger.error(f"Error in CrewAI pipeline execution: {e}")
+            # Fallback to manual processing if needed
+            logger.warning("Falling back to manual processing due to CrewAI error")
+            return await self._fallback_manual_processing(emails, user_profile.user_id)
+    
+    def _extract_entities_from_crew_result(self, crew_result) -> List[Dict[str, Any]]:
+        """Extract processed entities from crew execution result."""
+        try:
+            logger.info(f"[CREWAI] Extracting entities from crew result: {type(crew_result)}")
+            
+            # CrewAI 0.55+ returns a CrewOutput object
+            if hasattr(crew_result, 'tasks_output') and crew_result.tasks_output:
+                # Get the task outputs - we want the store_entities_task output (second to last)
+                task_outputs = crew_result.tasks_output
+                logger.info(f"[CREWAI] Found {len(task_outputs)} task outputs")
+                
+                # Log all task outputs for debugging
+                for i, task_output in enumerate(task_outputs):
+                    if hasattr(task_output, 'raw'):
+                        logger.info(f"[CREWAI] Task {i} output preview: {str(task_output.raw)[:200]}...")
+                
+                # Strategy 1: Try to get the store entities task output (index -2, before notification task)
+                if len(task_outputs) >= 2:
+                    store_task_output = task_outputs[-2]  # Second to last task (store entities)
+                    logger.info(f"[CREWAI] Store task output type: {type(store_task_output)}")
+                    
+                    entities = self._try_extract_json_entities(store_task_output, "store_task")
+                    if entities:
+                        logger.info(f"[CREWAI] Successfully extracted {len(entities)} entities from store task")
+                        return entities
+                
+                # Strategy 2: Try deduplication task (index -3)
+                if len(task_outputs) >= 3:
+                    dedup_task_output = task_outputs[-3]  # Third to last task (deduplication)
+                    entities = self._try_extract_json_entities(dedup_task_output, "dedup_task")
+                    if entities:
+                        logger.info(f"[CREWAI] Successfully extracted {len(entities)} entities from dedup task")
+                        return entities
+                
+                # Strategy 3: Try classification task (index -4)
+                if len(task_outputs) >= 4:
+                    classify_task_output = task_outputs[-4]  # Fourth to last task (classification)
+                    entities = self._try_extract_json_entities(classify_task_output, "classify_task")
+                    if entities:
+                        logger.info(f"[CREWAI] Successfully extracted {len(entities)} entities from classify task")
+                        return entities
+                
+                # Strategy 4: Scan all task outputs for entity-like data
+                logger.info("[CREWAI] Scanning all task outputs for entity data...")
+                for i, task_output in enumerate(task_outputs):
+                    entities = self._try_extract_json_entities(task_output, f"task_{i}")
+                    if entities:
+                        logger.info(f"[CREWAI] Successfully extracted {len(entities)} entities from task {i}")
+                        return entities
+            
+            # Fallback to trying the main result object
+            if hasattr(crew_result, 'raw') and isinstance(crew_result.raw, str):
+                entities = self._try_extract_json_entities(crew_result, "main_result")
+                if entities:
+                    logger.info(f"[CREWAI] Successfully extracted {len(entities)} entities from main result")
+                    return entities
+            
+            # Direct result checks
+            if isinstance(crew_result, dict):
+                entities = self._extract_entities_from_dict(crew_result)
+                if entities:
+                    logger.info(f"[CREWAI] Successfully extracted {len(entities)} entities from result dict")
+                    return entities
+            elif isinstance(crew_result, list):
+                if all(isinstance(item, dict) for item in crew_result):
+                    logger.info(f"[CREWAI] Found entity list directly in result: {len(crew_result)} entities")
+                    return crew_result
+            
+            logger.warning("[CREWAI] Could not extract entities from crew result, returning empty list")
+            return []
+            
+        except Exception as e:
+            logger.error(f"Error extracting entities from crew result: {e}")
+            return []
+    
+    def _try_extract_json_entities(self, task_output, source_name: str) -> List[Dict[str, Any]]:
+        """Try to extract entities from a task output as JSON."""
+        try:
+            if not hasattr(task_output, 'raw') or not task_output.raw:
+                return []
+            
+            raw_text = task_output.raw.strip()
+            if not raw_text:
+                return []
+            
+            # Try to parse as JSON
+            try:
+                import json
+                result_data = json.loads(raw_text)
+                logger.info(f"[CREWAI] Parsed {source_name} JSON: {type(result_data)}")
+                
+                return self._extract_entities_from_dict(result_data)
+                
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.debug(f"[CREWAI] Could not parse {source_name} as JSON: {e}")
+                
+                # Try to extract JSON from text that might contain other content
+                json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                if json_match:
+                    try:
+                        result_data = json.loads(json_match.group())
+                        return self._extract_entities_from_dict(result_data)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                
+                # Try to extract JSON array
+                json_array_match = re.search(r'\[.*\]', raw_text, re.DOTALL)
+                if json_array_match:
+                    try:
+                        result_data = json.loads(json_array_match.group())
+                        if isinstance(result_data, list) and all(isinstance(item, dict) for item in result_data):
+                            return result_data
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                
+                return []
+        
+        except Exception as e:
+            logger.debug(f"Error extracting from {source_name}: {e}")
+            return []
+    
+    def _extract_entities_from_dict(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract entities from a dictionary structure."""
+        if isinstance(data, list):
+            # If it's already a list of entities
+            if all(isinstance(item, dict) for item in data):
+                return data
+        elif isinstance(data, dict):
+            # Try different keys that might contain entities
+            for key in ['stored_entities', 'unique_entities', 'processed_entities', 'entities', 'classified_entities', 'validated_entities']:
+                if key in data and isinstance(data[key], list):
+                    entities = data[key]
+                    # Extract entity data if it's nested
+                    clean_entities = []
+                    for entity in entities:
+                        if isinstance(entity, dict):
+                            # Handle nested structure like {"data": {...}, "entity_id": "..."}
+                            if 'data' in entity and isinstance(entity['data'], dict):
+                                clean_entities.append(entity['data'])
+                            # Handle entity with metadata
+                            elif any(field in entity for field in ['merchant', 'amount', 'entity_type']):
+                                clean_entities.append(entity)
+                            # Handle classified entity structure
+                            elif 'entity_data' in entity:
+                                clean_entities.append(entity['entity_data'])
+                            else:
+                                clean_entities.append(entity)
+                    return clean_entities
+        
+        return []
+    
+    async def _fallback_manual_processing(
         self, 
         emails: List[Dict[str, Any]], 
         user_id: str
     ) -> List[Dict[str, Any]]:
-        """Process emails through the CrewAI agent pipeline."""
+        """Fallback manual processing if CrewAI fails."""
         
+        logger.info("Using fallback manual processing")
         processed_entities = []
         
         for email_data in emails:
@@ -158,6 +373,58 @@ class EmailProcessingService:
                 continue
         
         return processed_entities
+    
+    def _categorize_processing_error(self, error: Exception) -> Dict[str, Any]:
+        """Categorize processing errors and provide recovery suggestions."""
+        
+        error_str = str(error).lower()
+        
+        if "gmail" in error_str or "authentication" in error_str:
+            return {
+                "category": "gmail_auth_error",
+                "suggestions": [
+                    "Check Gmail credentials",
+                    "Refresh access token",
+                    "Re-authorize Gmail access"
+                ]
+            }
+        elif "crewai" in error_str or "crew" in error_str:
+            return {
+                "category": "crewai_execution_error",
+                "suggestions": [
+                    "Check agent configuration",
+                    "Verify task dependencies",
+                    "Review LLM API limits",
+                    "Use fallback manual processing"
+                ]
+            }
+        elif "validation" in error_str or "schema" in error_str:
+            return {
+                "category": "data_validation_error",
+                "suggestions": [
+                    "Review entity extraction logic",
+                    "Check schema definitions",
+                    "Validate input data format"
+                ]
+            }
+        elif "timeout" in error_str or "execution" in error_str:
+            return {
+                "category": "timeout_error",
+                "suggestions": [
+                    "Reduce batch size",
+                    "Increase timeout limits",
+                    "Process emails in smaller chunks"
+                ]
+            }
+        else:
+            return {
+                "category": "general_error",
+                "suggestions": [
+                    "Check system logs",
+                    "Verify service dependencies",
+                    "Retry processing"
+                ]
+            }
     
     async def _preprocess_email(self, email_data: Dict[str, Any]) -> str:
         """Preprocess email using the preprocessing tool."""

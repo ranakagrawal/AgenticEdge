@@ -142,43 +142,87 @@ GmailService.get_financial_emails()
 └── Return structured email data
 ```
 
-### Phase 2: AI Processing Pipeline
+### Phase 2: CrewAI Orchestrated Processing Pipeline
 ```python
-EmailProcessingService._process_emails_with_crew()
-├── For each email:
-│   ├── Step 1: Preprocess email content
-│   ├── Step 2: Extract entities using LLM
-│   ├── Step 3: Validate extracted data
-│   ├── Step 4: Classify entity type
-│   ├── Step 5: Check for duplicates
-│   └── Step 6: Add metadata and store
-└── Return processed entities list
+EmailProcessingService._run_crewai_pipeline()
+├── Create processing crew with 8 agents
+├── Prepare crew input context (emails, user profile, run_id)
+├── Execute crew.kickoff() - sequential task workflow
+└── Extract results from crew execution
 ```
 
-### CrewAI Agent Workflow
+### CrewAI Agent and Task Workflow (Sequential)
 ```
-Supervisor Agent (Orchestrator)
+Task 1: Fetch Emails Task
+    Agent: Email Fetcher Agent → Fetch emails from Gmail API
+    Output: List of email dictionaries
     ↓
-Email Fetcher Agent → Fetch emails from Gmail
+Task 2: Preprocess Emails Task  
+    Agent: Preprocessor Agent → Clean HTML, remove noise, structure content
+    Input: Email list from Task 1
+    Output: List of cleaned email texts
     ↓
-Preprocessor Agent → Clean HTML, remove noise
+Task 3: Extract Entities Task
+    Agent: Entity Extractor Agent → LLM extraction of financial data
+    Input: Cleaned emails from Task 2
+    Output: List of extracted financial entities
     ↓
-Entity Extractor Agent → LLM extraction of financial data
+Task 4: Validate Entities Task
+    Agent: Schema Validator Agent → Validate data structure and completeness
+    Input: Extracted entities from Task 3
+    Output: List of validation results with valid entities
     ↓
-Schema Validator Agent → Validate data structure
+Task 5: Classify Entities Task
+    Agent: Classifier Agent → Categorize entities and determine processing rules
+    Input: Validated entities from Task 4
+    Output: List of classified entities with metadata
     ↓
-Classifier Agent → Categorize entity type
+Task 6: Deduplicate Entities Task
+    Agent: Validator Deduplicator Agent → Remove duplicates and merge similar entries
+    Input: Classified entities from Task 5
+    Output: Unique entities list with duplicate summary
     ↓
-Deduplicator Agent → Remove duplicates
+Task 7: Store Entities Task
+    Agent: State Updater Agent → Store entities in database with metadata
+    Input: Unique entities from Task 6
+    Output: Storage confirmation with entity IDs
     ↓
-State Updater Agent → Store in database/files
-    ↓
-Notifier Agent → Log results and notify
+Task 8: Notify Completion Task
+    Agent: Notifier Agent → Generate completion notifications and final logs
+    Input: Storage results from Task 7
+    Output: Processing completion summary
+```
+
+### Key CrewAI Features Used
+- **Sequential Process**: Tasks execute in dependency order
+- **Task Context**: Each task receives output from previous task
+- **Agent Specialization**: Each agent has specific role and tools
+- **Memory**: Crew maintains context throughout execution
+- **Error Recovery**: Fallback to manual processing if crew fails
+
+### CrewAI Configuration
+The CrewAI implementation uses the following configuration (configurable via environment variables):
+
+```python
+# CrewAI Crew Settings
+crewai_verbose = True                    # Enable detailed logging
+crewai_memory = True                     # Enable crew memory
+crewai_max_execution_time = 3600         # 1 hour max execution
+crewai_max_iter = 3                      # Max iterations per task
+
+# Task Settings
+task_timeout_seconds = 300               # 5 minutes per task
+task_retry_attempts = 2                  # Retry failed tasks
+
+# LLM Settings
+llm_model = "gpt-3.5-turbo"             # OpenAI model
+crewai_temperature = 0.1                 # Low temperature for consistency
+llm_max_tokens = 2000                    # Token limit per request
 ```
 
 ### LLM Processing Details
 **Tool**: `EntityExtractionTool`
-**Model**: GPT-4 via OpenAI API
+**Model**: Configurable (default: GPT-3.5-turbo) via OpenAI API
 **Input**: Clean email text
 **Output**: Structured JSON with:
 ```json

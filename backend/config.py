@@ -43,6 +43,27 @@ class Settings(BaseSettings):
         'https://www.googleapis.com/auth/userinfo.profile'
     ]
     
+    # CrewAI Configuration
+    crewai_verbose: bool = bool(os.getenv("CREWAI_VERBOSE", "true").lower() == "true")
+    crewai_memory: bool = bool(os.getenv("CREWAI_MEMORY", "true").lower() == "true")
+    crewai_max_execution_time: int = int(os.getenv("CREWAI_MAX_EXECUTION_TIME", "3600"))  # 1 hour
+    crewai_max_iter: int = int(os.getenv("CREWAI_MAX_ITER", "3"))
+    crewai_temperature: float = float(os.getenv("CREWAI_TEMPERATURE", "0.1"))
+    
+    # Task Configuration
+    task_timeout_seconds: int = int(os.getenv("TASK_TIMEOUT_SECONDS", "300"))  # 5 minutes per task
+    task_retry_attempts: int = int(os.getenv("TASK_RETRY_ATTEMPTS", "2"))
+    
+    # Processing Configuration
+    email_batch_size: int = int(os.getenv("EMAIL_BATCH_SIZE", "50"))
+    max_emails_per_run: int = int(os.getenv("MAX_EMAILS_PER_RUN", "100"))
+    days_back_default: int = int(os.getenv("DAYS_BACK_DEFAULT", "180"))
+    
+    # LLM Configuration
+    llm_model: str = os.getenv("LLM_MODEL", "gpt-3.5-turbo")
+    llm_max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "2000"))
+    llm_request_timeout: int = int(os.getenv("LLM_REQUEST_TIMEOUT", "30"))
+    
     class Config:
         env_file = ".env"
 

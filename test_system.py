@@ -206,6 +206,190 @@ def test_sample_processing():
         return False
 
 
+def test_crewai_agents():
+    """Test CrewAI agent creation."""
+    print("\n🤖 Testing CrewAI agents...")
+    
+    try:
+        from backend.agents.finance_agents import FinanceProcessingAgents
+        from backend.models.entities import UserProfile
+        
+        # Create agents factory
+        agents_factory = FinanceProcessingAgents()
+        print("✅ FinanceProcessingAgents factory created")
+        
+        # Test agent creation
+        preprocessor = agents_factory.create_preprocessor_agent()
+        print(f"✅ Preprocessor agent created: {preprocessor.role}")
+        
+        extractor = agents_factory.create_entity_extractor_agent()
+        print(f"✅ Entity extractor agent created: {extractor.role}")
+        
+        validator = agents_factory.create_schema_validator_agent()
+        print(f"✅ Validator agent created: {validator.role}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ CrewAI agents test failed: {e}")
+        return False
+
+
+def test_crewai_tasks():
+    """Test CrewAI task creation."""
+    print("\n📋 Testing CrewAI tasks...")
+    
+    try:
+        from backend.agents.finance_agents import FinanceProcessingAgents
+        from backend.agents.finance_tasks import FinanceProcessingTasks
+        from backend.models.entities import UserProfile
+        
+        # Create mock user profile
+        user_profile = UserProfile(
+            user_id="test_user_crewai",
+            email="test@example.com",
+            name="Test User",
+            access_token="mock_token",
+            refresh_token="mock_refresh"
+        )
+        
+        # Create agents factory and tasks factory
+        agents_factory = FinanceProcessingAgents()
+        tasks_factory = FinanceProcessingTasks(agents_factory)
+        print("✅ Tasks factory created")
+        
+        # Test task creation
+        fetch_task = tasks_factory.create_fetch_emails_task(user_profile)
+        print(f"✅ Fetch emails task created")
+        
+        preprocess_task = tasks_factory.create_preprocess_emails_task(fetch_task)
+        print(f"✅ Preprocess emails task created")
+        
+        extract_task = tasks_factory.create_extract_entities_task(preprocess_task)
+        print(f"✅ Extract entities task created")
+        
+        # Test complete workflow
+        workflow = tasks_factory.create_task_workflow(user_profile)
+        print(f"✅ Complete workflow created with {len(workflow)} tasks")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ CrewAI tasks test failed: {e}")
+        return False
+
+
+def test_crewai_crew_creation():
+    """Test CrewAI crew creation."""
+    print("\n👥 Testing CrewAI crew creation...")
+    
+    try:
+        from backend.agents.finance_agents import FinanceProcessingAgents
+        from backend.models.entities import UserProfile
+        
+        # Create mock user profile
+        user_profile = UserProfile(
+            user_id="test_user_crew",
+            email="test@example.com", 
+            name="Test User",
+            access_token="mock_token",
+            refresh_token="mock_refresh"
+        )
+        
+        # Create agents factory
+        agents_factory = FinanceProcessingAgents()
+        
+        # Test crew creation
+        crew = agents_factory.create_processing_crew(user_profile)
+        print(f"✅ Processing crew created with {len(crew.agents)} agents")
+        print(f"✅ Crew has {len(crew.tasks)} tasks configured")
+        print(f"✅ Crew process type: {crew.process}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ CrewAI crew creation test failed: {e}")
+        return False
+
+
+def test_updated_tools_context():
+    """Test updated tools with CrewAI context handling."""
+    print("\n🔧 Testing updated tools with CrewAI context...")
+    
+    try:
+        from backend.agents.tools import (
+            EmailProcessingTool,
+            EntityExtractionTool, 
+            SchemaValidationTool,
+            ClassificationTool,
+            DeduplicationTool
+        )
+        
+        # Test email preprocessing with list input (CrewAI context)
+        email_tool = EmailProcessingTool()
+        test_emails = [
+            {
+                "subject": "Netflix Subscription",
+                "body": "Your Netflix subscription of ₹649 will be charged",
+                "from": "netflix@example.com"
+            },
+            {
+                "subject": "HDFC Credit Card",
+                "body": "Your credit card bill of ₹12,500 is due on March 25",
+                "from": "hdfc@bank.com"
+            }
+        ]
+        
+        # Test with list input
+        result = email_tool._run(test_emails)
+        import json
+        parsed_result = json.loads(result)
+        print(f"✅ Email tool handles list input: {len(parsed_result)} emails processed")
+        
+        # Test entity extraction with single input
+        extraction_tool = EntityExtractionTool()
+        single_email_text = """
+        EMAIL SUBJECT: Netflix Subscription
+        FROM: netflix@example.com
+        CONTENT: Your Netflix subscription of ₹649 will be charged on Feb 15, 2024
+        """
+        
+        extraction_result = extraction_tool._run(single_email_text)
+        print("✅ Entity extraction tool works with single input")
+        
+        # Test validation with dict input
+        validation_tool = SchemaValidationTool()
+        test_entity = {
+            "merchant": "Netflix",
+            "amount": 649.0,
+            "entity_type": "subscription", 
+            "category": "entertainment",
+            "confidence_score": 0.9
+        }
+        
+        validation_result = validation_tool._run(test_entity)
+        result_data = json.loads(validation_result)
+        print(f"✅ Validation tool handles dict input: {result_data['valid']}")
+        
+        # Test classification with validation result structure
+        classification_tool = ClassificationTool()
+        validation_structure = {
+            "validated_data": test_entity,
+            "valid": True,
+            "errors": []
+        }
+        
+        classification_result = classification_tool._run(validation_structure)
+        result_data = json.loads(classification_result)
+        print(f"✅ Classification tool handles validation structure: {result_data['classified']}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Updated tools test failed: {e}")
+        return False
+
+
 def main():
     """Run all tests."""
     print("🧪 Finance Email Summarizer - System Tests")
@@ -216,7 +400,11 @@ def main():
         test_models,
         test_tools,
         test_email_simulation,
-        test_sample_processing
+        test_sample_processing,
+        test_crewai_agents,
+        test_crewai_tasks,
+        test_crewai_crew_creation,
+        test_updated_tools_context
     ]
     
     passed = 0

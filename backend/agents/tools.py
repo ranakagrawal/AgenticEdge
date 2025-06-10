@@ -16,10 +16,40 @@ class EmailProcessingTool(BaseTool):
     """Tool for preprocessing email content."""
     
     name: str = "Email Preprocessing Tool"
-    description: str = "Cleans and preprocesses email content for better LLM processing"
+    description: str = "Cleans and preprocesses email content for better LLM processing. Accepts email data from task context or direct input."
     
-    def _run(self, email_data: Dict[str, Any]) -> str:
+    def _run(self, email_data: Any) -> str:
         """Clean and preprocess email content."""
+        try:
+            import json
+            # Handle CrewAI task context or direct input
+            if isinstance(email_data, str):
+                # If string input, try to parse as JSON
+                try:
+                    email_data = json.loads(email_data)
+                except json.JSONDecodeError:
+                    return f"Error: Invalid JSON input - {email_data[:100]}..."
+            
+            # Handle list of emails (from task context)
+            if isinstance(email_data, list):
+                cleaned_emails = []
+                for email in email_data:
+                    cleaned_emails.append(self._clean_single_email(email))
+                return json.dumps(cleaned_emails)
+            
+            # Handle single email
+            elif isinstance(email_data, dict):
+                return self._clean_single_email(email_data)
+            
+            else:
+                return f"Error: Unexpected input type - {type(email_data)}"
+                
+        except Exception as e:
+            logger.error(f"Error preprocessing email: {e}")
+            return f"Error processing email: {str(e)}"
+    
+    def _clean_single_email(self, email_data: Dict[str, Any]) -> str:
+        """Clean a single email."""
         try:
             # Extract relevant fields
             subject = email_data.get('subject', '')
@@ -58,18 +88,51 @@ class EmailProcessingTool(BaseTool):
             return clean_text.strip()
             
         except Exception as e:
-            logger.error(f"Error preprocessing email: {e}")
-            return f"Error processing email: {str(e)}"
+            logger.error(f"Error cleaning single email: {e}")
+            return f"Error cleaning email: {str(e)}"
 
 
 class EntityExtractionTool(BaseTool):
     """Tool for extracting financial entities from email content using LLM."""
     
     name: str = "Entity Extraction Tool"
-    description: str = "Extracts structured financial information from email content"
+    description: str = "Extracts structured financial information from preprocessed email content. Handles task context data."
     
-    def _run(self, clean_email_text: str) -> str:
+    def _run(self, clean_email_text: Any) -> str:
         """Extract financial entities from clean email text."""
+        
+        try:
+            import json
+            # Handle CrewAI task context input
+            if isinstance(clean_email_text, str):
+                try:
+                    parsed_input = json.loads(clean_email_text)
+                    if isinstance(parsed_input, list):
+                        # Process list of cleaned emails
+                        extracted_entities = []
+                        for email_text in parsed_input:
+                            entity = self._extract_from_single_email(email_text)
+                            extracted_entities.append(entity)
+                        return json.dumps(extracted_entities)
+                except json.JSONDecodeError:
+                    # Treat as single email text
+                    return self._extract_from_single_email(clean_email_text)
+            elif isinstance(clean_email_text, list):
+                # List of email texts
+                extracted_entities = []
+                for email_text in clean_email_text:
+                    entity = self._extract_from_single_email(email_text)
+                    extracted_entities.append(entity)
+                return json.dumps(extracted_entities)
+            else:
+                return f"Error: Unexpected input type - {type(clean_email_text)}"
+                
+        except Exception as e:
+            logger.error(f"Error in entity extraction: {e}")
+            return f"Error extracting entities: {str(e)}"
+    
+    def _extract_from_single_email(self, email_text: str) -> str:
+        """Extract entities from a single email text."""
         
         extraction_prompt = f"""
         You are a financial data extraction expert specializing in Indian financial emails.
@@ -103,7 +166,7 @@ class EntityExtractionTool(BaseTool):
         9. Focus on actionable payment information
         
         Email Content:
-        {clean_email_text}
+        {email_text}
         
         Return only valid JSON, no additional text.
         """
@@ -117,20 +180,46 @@ class SchemaValidationTool(BaseTool):
     """Tool for validating extracted entity data against schema."""
     
     name: str = "Schema Validation Tool"
-    description: str = "Validates extracted financial entity data against predefined schema"
+    description: str = "Validates extracted financial entity data against predefined schema. Handles task context with multiple entities."
     
-    def _run(self, extracted_data: str) -> str:
+    def _run(self, extracted_data: Any) -> str:
         """Validate extracted entity data."""
         try:
-            # Parse JSON response
-            if not extracted_data.strip():
-                return json.dumps({"valid": False, "errors": ["Empty data"]})
+            # Handle different input types from CrewAI task context
+            if isinstance(extracted_data, str):
+                if not extracted_data.strip():
+                    return json.dumps({"valid": False, "errors": ["Empty data"]})
+                try:
+                    data = json.loads(extracted_data)
+                except json.JSONDecodeError as e:
+                    return json.dumps({"valid": False, "errors": [f"Invalid JSON: {str(e)}"]})
+            elif isinstance(extracted_data, (dict, list)):
+                data = extracted_data
+            else:
+                return json.dumps({"valid": False, "errors": [f"Unexpected input type: {type(extracted_data)}"]})
             
-            try:
-                data = json.loads(extracted_data)
-            except json.JSONDecodeError as e:
-                return json.dumps({"valid": False, "errors": [f"Invalid JSON: {str(e)}"]})
-            
+            # Handle list of entities
+            if isinstance(data, list):
+                validated_entities = []
+                for entity in data:
+                    validation_result = self._validate_single_entity(entity)
+                    validated_entities.append(validation_result)
+                return json.dumps({
+                    "validated_entities": validated_entities,
+                    "total_entities": len(data),
+                    "valid_entities": len([e for e in validated_entities if e.get("valid", False)])
+                })
+            else:
+                # Single entity validation
+                return json.dumps(self._validate_single_entity(data))
+                
+        except Exception as e:
+            logger.error(f"Error validating schema: {e}")
+            return json.dumps({"valid": False, "errors": [f"Validation error: {str(e)}"]})
+    
+    def _validate_single_entity(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate a single entity."""
+        try:
             errors = []
             
             # Required fields validation
@@ -183,23 +272,64 @@ class SchemaValidationTool(BaseTool):
                 "validated_data": data if len(errors) == 0 else None
             }
             
-            return json.dumps(result)
+            return result
             
         except Exception as e:
-            logger.error(f"Error validating schema: {e}")
-            return json.dumps({"valid": False, "errors": [f"Validation error: {str(e)}"]})
+            logger.error(f"Error validating single entity: {e}")
+            return {"valid": False, "errors": [f"Validation error: {str(e)}"]}
 
 
 class ClassificationTool(BaseTool):
     """Tool for classifying financial entities into categories."""
     
     name: str = "Entity Classification Tool"
-    description: str = "Classifies financial entities and determines processing rules"
+    description: str = "Classifies financial entities and determines processing rules. Handles task context with multiple validated entities."
     
-    def _run(self, validated_entity: str) -> str:
+    def _run(self, validated_entity: Any) -> str:
         """Classify entity and determine processing rules."""
         try:
-            data = json.loads(validated_entity)
+            # Handle different input types from CrewAI task context
+            if isinstance(validated_entity, str):
+                data = json.loads(validated_entity)
+            elif isinstance(validated_entity, dict):
+                # Handle validation result structure
+                if 'validated_entities' in validated_entity:
+                    # Multiple entities from validation task
+                    classified_entities = []
+                    for entity_result in validated_entity['validated_entities']:
+                        if entity_result.get('valid', False):
+                            classified = self._classify_single_entity(entity_result['validated_data'])
+                            classified_entities.append(classified)
+                    return json.dumps({
+                        "classified_entities": classified_entities,
+                        "total_classified": len(classified_entities)
+                    })
+                elif 'validated_data' in validated_entity:
+                    # Single validated entity
+                    data = validated_entity['validated_data']
+                else:
+                    # Direct entity data
+                    data = validated_entity
+            elif isinstance(validated_entity, list):
+                # List of entities
+                classified_entities = []
+                for entity in validated_entity:
+                    classified = self._classify_single_entity(entity)
+                    classified_entities.append(classified)
+                return json.dumps(classified_entities)
+            else:
+                return json.dumps({"classified": False, "error": f"Unexpected input type: {type(validated_entity)}"})
+            
+            # Single entity classification
+            return json.dumps(self._classify_single_entity(data))
+            
+        except Exception as e:
+            logger.error(f"Error classifying entity: {e}")
+            return json.dumps({"classified": False, "error": str(e)})
+    
+    def _classify_single_entity(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Classify a single entity."""
+        try:
             
             merchant = data.get('merchant', '').lower()
             entity_type = data.get('entity_type', '')
@@ -261,28 +391,92 @@ class ClassificationTool(BaseTool):
                 }
             }
             
-            return json.dumps(result)
+            return result
             
         except Exception as e:
-            logger.error(f"Error classifying entity: {e}")
-            return json.dumps({"classified": False, "error": str(e)})
+            logger.error(f"Error classifying single entity: {e}")
+            return {"classified": False, "error": str(e)}
 
 
 class DeduplicationTool(BaseTool):
     """Tool for detecting and handling duplicate entities."""
     
     name: str = "Deduplication Tool"
-    description: str = "Detects and handles duplicate financial entities"
+    description: str = "Detects and handles duplicate financial entities. Handles task context with classified entities."
     
-    def _run(self, entity_data: str, existing_entities: str = "[]") -> str:
+    def _run(self, entity_data: Any, existing_entities: str = "[]") -> str:
         """Check for duplicates and handle them."""
         try:
-            current_entity = json.loads(entity_data)
+            # Handle different input types from CrewAI task context
+            if isinstance(entity_data, str):
+                parsed_data = json.loads(entity_data)
+            elif isinstance(entity_data, dict):
+                parsed_data = entity_data
+            elif isinstance(entity_data, list):
+                # Handle list of entities from classification task
+                unique_entities = []
+                duplicate_info = []
+                
+                for entity in entity_data:
+                    if isinstance(entity, dict) and entity.get('classified', False):
+                        entity_data_dict = entity.get('entity_data', entity)
+                        dedup_result = self._check_duplicates_single(entity_data_dict, unique_entities)
+                        if dedup_result['action'] == 'process':
+                            unique_entities.append(entity_data_dict)
+                        else:
+                            duplicate_info.append(dedup_result)
+                
+                return json.dumps({
+                    "unique_entities": unique_entities,
+                    "duplicate_info": duplicate_info,
+                    "total_unique": len(unique_entities),
+                    "duplicates_found": len(duplicate_info)
+                })
+            else:
+                return json.dumps({"error": f"Unexpected input type: {type(entity_data)}"})
+            
+            # Handle classification result structure
+            if 'classified_entities' in parsed_data:
+                entities_list = parsed_data['classified_entities']
+                unique_entities = []
+                duplicate_info = []
+                
+                for entity in entities_list:
+                    if entity.get('classified', False):
+                        entity_data_dict = entity.get('entity_data', entity)
+                        dedup_result = self._check_duplicates_single(entity_data_dict, unique_entities)
+                        if dedup_result['action'] == 'process':
+                            unique_entities.append(entity_data_dict)
+                        else:
+                            duplicate_info.append(dedup_result)
+                
+                return json.dumps({
+                    "unique_entities": unique_entities,
+                    "duplicate_info": duplicate_info,
+                    "total_unique": len(unique_entities),
+                    "duplicates_found": len(duplicate_info)
+                })
+            
+            # Single entity deduplication
+            if 'entity_data' in parsed_data:
+                current_entity = parsed_data['entity_data']
+            else:
+                current_entity = parsed_data
+                
             existing = json.loads(existing_entities) if existing_entities else []
+            return json.dumps(self._check_duplicates_single(current_entity, existing))
+            
+        except Exception as e:
+            logger.error(f"Error checking duplicates: {e}")
+            return json.dumps({"error": str(e)})
+    
+    def _check_duplicates_single(self, current_entity: Dict[str, Any], existing_entities: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Check duplicates for a single entity."""
+        try:
             
             duplicates = []
             
-            for existing_entity in existing:
+            for existing_entity in existing_entities:
                 # Check for duplicates based on multiple criteria
                 is_duplicate = self._is_duplicate(current_entity, existing_entity)
                 if is_duplicate:
@@ -296,11 +490,11 @@ class DeduplicationTool(BaseTool):
                 "entity_data": current_entity
             }
             
-            return json.dumps(result)
+            return result
             
         except Exception as e:
-            logger.error(f"Error checking duplicates: {e}")
-            return json.dumps({"is_duplicate": False, "error": str(e)})
+            logger.error(f"Error checking duplicates for single entity: {e}")
+            return {"is_duplicate": False, "error": str(e)}
     
     def _is_duplicate(self, entity1: Dict, entity2: Dict) -> bool:
         """Check if two entities are duplicates."""
@@ -326,12 +520,45 @@ class DatabaseTool(BaseTool):
     """Tool for database operations."""
     
     name: str = "Database Tool"
-    description: str = "Handles database operations for financial entities"
+    description: str = "Handles database operations for financial entities. Handles task context with deduplicated entities."
     
-    def _run(self, operation: str, data: str = "") -> str:
+    def _run(self, operation: Any, data: str = "") -> str:
         """Perform database operations."""
         try:
-            if operation == "save_entity":
+            # Handle CrewAI task context - operation might be the deduplication result
+            if isinstance(operation, dict):
+                if 'unique_entities' in operation:
+                    # Store multiple unique entities
+                    entities_to_store = operation['unique_entities']
+                    stored_entities = []
+                    
+                    for entity in entities_to_store:
+                        entity_id = f"entity_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(stored_entities)}"
+                        stored_entity = {
+                            "entity_id": entity_id,
+                            "data": entity,
+                            "stored_at": datetime.utcnow().isoformat(),
+                            "status": "active"
+                        }
+                        stored_entities.append(stored_entity)
+                    
+                    return json.dumps({
+                        "stored_entities": stored_entities,
+                        "total_stored": len(stored_entities),
+                        "duplicate_summary": operation.get('duplicate_info', [])
+                    })
+                else:
+                    # Single entity to store
+                    entity_id = f"entity_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    stored_entity = {
+                        "entity_id": entity_id,
+                        "data": operation,
+                        "stored_at": datetime.utcnow().isoformat(),
+                        "status": "active"
+                    }
+                    return json.dumps(stored_entity)
+            
+            elif isinstance(operation, str) and operation == "save_entity":
                 entity_data = json.loads(data)
                 # In a real implementation, this would save to MongoDB
                 # For now, just return success
