@@ -8,6 +8,7 @@ from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
 from loguru import logger
+import uuid
 
 from backend.models.entities import PaymentEntity, EntityType, EntityCategory, EntityStatus
 
@@ -403,71 +404,52 @@ class DeduplicationTool(BaseTool):
     
     name: str = "Deduplication Tool"
     description: str = "Detects and handles duplicate financial entities. Handles task context with classified entities."
-    
-    def _run(self, entity_data: Any, existing_entities: str = "[]") -> str:
-        """Check for duplicates and handle them."""
+
+    def _run(self, entity_data: Any, existing_entities: Any = "[]") -> str:
+        """Detect and merge duplicate financial entities."""
         try:
             # Handle different input types from CrewAI task context
             if isinstance(entity_data, str):
-                parsed_data = json.loads(entity_data)
-            elif isinstance(entity_data, dict):
-                parsed_data = entity_data
-            elif isinstance(entity_data, list):
-                # Handle list of entities from classification task
-                unique_entities = []
-                duplicate_info = []
-                
-                for entity in entity_data:
-                    if isinstance(entity, dict) and entity.get('classified', False):
-                        entity_data_dict = entity.get('entity_data', entity)
-                        dedup_result = self._check_duplicates_single(entity_data_dict, unique_entities)
-                        if dedup_result['action'] == 'process':
-                            unique_entities.append(entity_data_dict)
-                        else:
-                            duplicate_info.append(dedup_result)
-                
-                return json.dumps({
-                    "unique_entities": unique_entities,
-                    "duplicate_info": duplicate_info,
-                    "total_unique": len(unique_entities),
-                    "duplicates_found": len(duplicate_info)
-                })
+                try:
+                    current_entities = json.loads(entity_data)
+                except json.JSONDecodeError:
+                    return json.dumps({"error": f"Invalid JSON in entity_data: {entity_data[:100]}"})
             else:
-                return json.dumps({"error": f"Unexpected input type: {type(entity_data)}"})
-            
-            # Handle classification result structure
-            if 'classified_entities' in parsed_data:
-                entities_list = parsed_data['classified_entities']
-                unique_entities = []
-                duplicate_info = []
-                
-                for entity in entities_list:
-                    if entity.get('classified', False):
-                        entity_data_dict = entity.get('entity_data', entity)
-                        dedup_result = self._check_duplicates_single(entity_data_dict, unique_entities)
-                        if dedup_result['action'] == 'process':
-                            unique_entities.append(entity_data_dict)
-                        else:
-                            duplicate_info.append(dedup_result)
-                
-                return json.dumps({
-                    "unique_entities": unique_entities,
-                    "duplicate_info": duplicate_info,
-                    "total_unique": len(unique_entities),
-                    "duplicates_found": len(duplicate_info)
-                })
-            
-            # Single entity deduplication
-            if 'entity_data' in parsed_data:
-                current_entity = parsed_data['entity_data']
+                current_entities = entity_data
+
+            if isinstance(existing_entities, str):
+                try:
+                    existing_entities_list = json.loads(existing_entities)
+                except json.JSONDecodeError:
+                    existing_entities_list = []
             else:
-                current_entity = parsed_data
-                
-            existing = json.loads(existing_entities) if existing_entities else []
-            return json.dumps(self._check_duplicates_single(current_entity, existing))
+                existing_entities_list = existing_entities
+
+            if not isinstance(current_entities, list):
+                current_entities = [current_entities]
+
+            unique_entities = []
+            duplicate_info = []
+
+            for entity in current_entities:
+                result = self._check_duplicates_single(entity, existing_entities_list + unique_entities)
+                if not result["is_duplicate"]:
+                    unique_entities.append(entity)
+                else:
+                    duplicate_info.append({
+                        "entity": entity,
+                        "duplicate_of": result["duplicate_of"]
+                    })
             
+            return json.dumps({
+                "unique_entities": unique_entities,
+                "duplicate_info": duplicate_info,
+                "total_unique": len(unique_entities),
+                "duplicates_found": len(duplicate_info)
+            })
+
         except Exception as e:
-            logger.error(f"Error checking duplicates: {e}")
+            logger.error(f"Error in deduplication tool: {e}")
             return json.dumps({"error": str(e)})
     
     def _check_duplicates_single(self, current_entity: Dict[str, Any], existing_entities: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -521,23 +503,31 @@ class DatabaseTool(BaseTool):
     
     name: str = "Database Tool"
     description: str = "Handles database operations for financial entities. Handles task context with deduplicated entities."
-    
-    def _run(self, operation: Any, data: str = "") -> str:
-        """Perform database operations."""
+
+    def _run(self, operation: str, data: str = "") -> str:
+        """Run database operations."""
+        logger.info(f"DatabaseTool called with operation: {operation}")
+        
         try:
-            # Handle CrewAI task context - operation might be the deduplication result
-            if isinstance(operation, dict):
-                if 'unique_entities' in operation:
-                    # Store multiple unique entities
-                    entities_to_store = operation['unique_entities']
-                    stored_entities = []
+            if operation == "query":
+                # Dummy implementation for querying
+                return json.dumps({"status": "success", "data": []})
+            
+            elif operation == "batch_insert":
+                try:
+                    entities = json.loads(data)
+                    if not isinstance(entities, list):
+                        return json.dumps({"error": "batch_insert expects a list of entities"})
                     
-                    for entity in entities_to_store:
-                        entity_id = f"entity_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(stored_entities)}"
+                    logger.info(f"Attempting to batch insert {len(entities)} entities.")
+                    
+                    # Dummy implementation for batch insert
+                    stored_entities = []
+                    for entity in entities:
                         stored_entity = {
-                            "entity_id": entity_id,
-                            "data": entity,
-                            "stored_at": datetime.utcnow().isoformat(),
+                            **entity,
+                            "entity_id": str(uuid.uuid4()),
+                            "created_at": datetime.utcnow().isoformat(),
                             "status": "active"
                         }
                         stored_entities.append(stored_entity)
@@ -545,41 +535,24 @@ class DatabaseTool(BaseTool):
                     return json.dumps({
                         "stored_entities": stored_entities,
                         "total_stored": len(stored_entities),
-                        "duplicate_summary": operation.get('duplicate_info', [])
+                        "processing_summary": {
+                            "success": True,
+                            "entities_processed": len(stored_entities),
+                            "errors": []
+                        }
                     })
-                else:
-                    # Single entity to store
-                    entity_id = f"entity_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                    stored_entity = {
-                        "entity_id": entity_id,
-                        "data": operation,
-                        "stored_at": datetime.utcnow().isoformat(),
-                        "status": "active"
-                    }
-                    return json.dumps(stored_entity)
-            
-            elif isinstance(operation, str) and operation == "save_entity":
-                entity_data = json.loads(data)
-                # In a real implementation, this would save to MongoDB
-                # For now, just return success
-                result = {
-                    "saved": True,
-                    "entity_id": f"entity_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-                return json.dumps(result)
-            
-            elif operation == "get_existing_entities":
-                # In a real implementation, this would query MongoDB
-                # For now, return empty list
-                return json.dumps([])
+                except json.JSONDecodeError:
+                    return json.dumps({"error": "Invalid JSON format for data in batch_insert"})
+                except Exception as e:
+                    logger.error(f"Error during batch insert: {e}")
+                    return json.dumps({"error": f"Batch insert failed: {str(e)}"})
             
             else:
                 return json.dumps({"error": f"Unknown operation: {operation}"})
                 
         except Exception as e:
-            logger.error(f"Database operation error: {e}")
-            return json.dumps({"error": str(e)})
+            logger.error(f"Error in DatabaseTool: {e}")
+            return json.dumps({"error": f"An unexpected error occurred: {str(e)}"})
 
 
 # Export all tools

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+import os
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from loguru import logger
@@ -166,7 +167,7 @@ class EmailProcessingService:
                 processed_entities = result['processed_entities']
             else:
                 # If result format is different, extract from the final task output
-                processed_entities = self._extract_entities_from_crew_result(result)
+                processed_entities = self._extract_entities_from_crew_result(result, run_id)
             
             logger.info(f"[CREWAI] CrewAI pipeline processed {len(processed_entities)} entities")
             return processed_entities
@@ -177,10 +178,14 @@ class EmailProcessingService:
             logger.warning("Falling back to manual processing due to CrewAI error")
             return await self._fallback_manual_processing(emails, user_profile.user_id)
     
-    def _extract_entities_from_crew_result(self, crew_result) -> List[Dict[str, Any]]:
+    def _extract_entities_from_crew_result(self, crew_result, run_id: str) -> List[Dict[str, Any]]:
         """Extract processed entities from crew execution result."""
         try:
             logger.info(f"[CREWAI] Extracting entities from crew result: {type(crew_result)}")
+
+            # Create a directory for agent outputs for this run
+            output_dir = os.path.join(settings.log_dir, run_id, "agent_outputs")
+            os.makedirs(output_dir, exist_ok=True)
             
             # CrewAI 0.55+ returns a CrewOutput object
             if hasattr(crew_result, 'tasks_output') and crew_result.tasks_output:
@@ -190,9 +195,80 @@ class EmailProcessingService:
                 
                 # Log all task outputs for debugging
                 for i, task_output in enumerate(task_outputs):
-                    if hasattr(task_output, 'raw'):
-                        logger.info(f"[CREWAI] Task {i} output preview: {str(task_output.raw)[:200]}...")
-                
+                    agent_name = f"agent_{i}"
+                    
+                    # Debug: log the actual attributes of task_output
+                    logger.info(f"[CREWAI] Task {i} attributes: {dir(task_output)}")
+                    
+                    try:
+                        if hasattr(task_output, 'agent') and task_output.agent:
+                            # Check if agent is an object with role attribute or just a string
+                            if hasattr(task_output.agent, 'role'):
+                                agent_name = task_output.agent.role.lower().replace(" ", "_")
+                            elif isinstance(task_output.agent, str):
+                                agent_name = task_output.agent.lower().replace(" ", "_")
+                            else:
+                                agent_name = str(task_output.agent).lower().replace(" ", "_")
+                        elif hasattr(task_output, 'description') and task_output.description:
+                            # Try to infer agent name from description
+                            description = str(task_output.description).lower()
+                            if "email fetcher" in description:
+                                agent_name = "email_fetcher"
+                            elif "preprocessor" in description:
+                                agent_name = "email_preprocessor"
+                            elif "entity extractor" in description:
+                                agent_name = "financial_entity_extractor"
+                            elif "validator" in description and "deduplicator" not in description:
+                                agent_name = "data_validator"
+                            elif "classifier" in description:
+                                agent_name = "financial_classifier"
+                            elif "deduplicator" in description:
+                                agent_name = "validator_and_deduplicator"
+                            elif "state updater" in description:
+                                agent_name = "state_updater"
+                            elif "notification" in description:
+                                agent_name = "notification_manager"
+                        
+                        output_filename = os.path.join(output_dir, f"task_{i}_{agent_name}.json")
+                        
+                        output_content = {}
+                        if hasattr(task_output, 'raw') and task_output.raw:
+                            # Log a preview of the raw output
+                            logger.info(f"[CREWAI] Task {i} output preview: {str(task_output.raw)[:200]}...")
+                            # Try to parse as JSON, otherwise save as string
+                            try:
+                                output_content = json.loads(task_output.raw)
+                            except (json.JSONDecodeError, TypeError):
+                                output_content = {"raw_output": str(task_output.raw)}
+                        elif hasattr(task_output, 'result') and task_output.result:
+                            try:
+                                output_content = json.loads(task_output.result)
+                            except (json.JSONDecodeError, TypeError):
+                                output_content = {"result_output": str(task_output.result)}
+                        else:
+                            output_content = {"output": str(task_output)}
+                        
+                        with open(output_filename, 'w') as f:
+                            json.dump(output_content, f, indent=2)
+                        
+                        logger.info(f"Saved output for task {i} ({agent_name}) to {output_filename}")
+
+                    except Exception as e:
+                        logger.error(f"Could not save output for task {i} ({agent_name}): {e}")
+                        # Still try to save something even if there's an error
+                        try:
+                            fallback_filename = os.path.join(output_dir, f"task_{i}_error.json")
+                            with open(fallback_filename, 'w') as f:
+                                json.dump({
+                                    "error": str(e),
+                                    "task_output_str": str(task_output),
+                                    "task_attributes": dir(task_output) if hasattr(task_output, '__dict__') else "no attributes"
+                                }, f, indent=2)
+                            logger.info(f"Saved error output to {fallback_filename}")
+                        except Exception as fallback_error:
+                            logger.error(f"Could not even save error output: {fallback_error}")
+
+
                 # Strategy 1: Try to get the store entities task output (index -2, before notification task)
                 if len(task_outputs) >= 2:
                     store_task_output = task_outputs[-2]  # Second to last task (store entities)

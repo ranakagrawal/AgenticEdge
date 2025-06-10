@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     
     # Logging
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    log_dir: str = os.getenv("LOG_DIR", "logs")
     
     # Gmail API Scopes (including openid to match Google's automatic addition)
     gmail_scopes: list[str] = [

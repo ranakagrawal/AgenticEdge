@@ -192,26 +192,19 @@ class FinanceProcessingTasks:
         """Create task for storing validated entities to database."""
         return Task(
             description="""
-            Store validated and deduplicated financial entities to the database.
-            
-            Storage requirements:
-            1. Save each entity with proper indexing
-            2. Add processing metadata (timestamps, run_id, etc.)
-            3. Update entity status to 'active'
-            4. Create audit trail for entity creation
-            5. Handle database transactions properly
-            6. Return storage confirmation with entity IDs
-            
-            For each entity, add:
-            - entity_id: Unique identifier
-            - created_at: Storage timestamp
-            - run_id: Processing run identifier
-            - status: 'active'
-            - last_updated: Current timestamp
-            - source_email_id: Original email message ID
-            
-            Handle errors gracefully and provide rollback capability.
-            
+            Store the unique financial entities from the previous step to the database.
+
+            You must use the 'batch_insert' operation of the 'Database Tool'.
+            The 'data' parameter for the tool must be a JSON string representation
+            of the list of unique entities.
+
+            Steps:
+            1. Get the 'unique_entities' list from the context.
+            2. Call the 'Database Tool' with:
+               - operation='batch_insert'
+               - data=JSON.stringify(unique_entities)
+            3. Ensure the output is a JSON object confirming the storage operation.
+
             IMPORTANT: You must return your result as valid JSON in this exact format:
             {
                 "stored_entities": [list of stored entities with metadata],
@@ -222,8 +215,6 @@ class FinanceProcessingTasks:
                     "errors": []
                 }
             }
-            
-            Expected output: JSON object containing stored entities with database IDs and storage status
             """,
             agent=self.agents_factory.create_state_updater_agent(),
             expected_output="JSON object with stored_entities array, total_stored count, and processing_summary",
