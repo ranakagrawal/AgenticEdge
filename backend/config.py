@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     google_redirect_uri: str = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/google/callback")
     
     # Database Configuration
-    mongodb_url: str = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+    mongodb_url: str = os.getenv("MONGO_URI", "mongodb://localhost:27017")
     database_name: str = os.getenv("DATABASE_NAME", "finance_email_summarizer")
     
     # Application Configuration

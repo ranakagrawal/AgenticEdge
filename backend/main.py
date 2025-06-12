@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from loguru import logger
+from motor.motor_asyncio import AsyncIOMotorClient
 
 from backend.config import settings
 from backend.services.gmail_service import GmailService
@@ -56,6 +57,10 @@ app.add_middleware(
 # Initialize services
 gmail_service = GmailService()
 email_processor = EmailProcessingService()
+
+# Initialize MongoDB client
+mongodb_client = AsyncIOMotorClient(settings.mongodb_url)
+db = mongodb_client[settings.database_name]
 
 # In-memory storage for demo (use Redis/Database in production)
 user_sessions = {}
@@ -171,6 +176,12 @@ async def handle_google_callback(code: str = Query(...), state: str = Query(None
         # Store user profile (in production, save to database)
         user_profiles[user_id] = user_profile
         user_sessions[state] = user_id
+        # Persist user profile to MongoDB
+        await db.users.update_one(
+            {"user_id": user_profile.user_id},
+            {"$set": user_profile.dict()},
+            upsert=True
+        )
         
         logger.info(f"Successfully authenticated user: {user_profile.email}")
         
@@ -218,6 +229,22 @@ async def process_user_emails(
         if 'entities' in processing_result and processing_result['entities']:
             user_entities[user_id] = processing_result['entities']
             logger.info(f"Stored {len(processing_result['entities'])} entities in memory for user {user_id}")
+            # Persist processing run to MongoDB
+            run_doc = {
+                "run_id": processing_result["run_id"],
+                "user_id": processing_result["user_id"],
+                "status": processing_result["status"],
+                "started_at": processing_result["started_at"],
+                "completed_at": processing_result["completed_at"],
+                "emails_processed": processing_result["emails_processed"],
+                "entities_extracted": processing_result["entities_extracted"],
+                "errors": processing_result.get("errors", []),
+                "summary": processing_result.get("summary", {})
+            }
+            await db.processing_runs.insert_one(run_doc)
+            # Persist extracted entities to MongoDB
+            for entity in processing_result.get("entities", []):
+                await db.entities.insert_one(entity)
         
         return ProcessingResponse(
             run_id=processing_result['run_id'],
